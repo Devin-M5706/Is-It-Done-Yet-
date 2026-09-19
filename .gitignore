@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# self-signed TLS material — regenerated on first run, never commit
+cert.pem
+key.pem
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

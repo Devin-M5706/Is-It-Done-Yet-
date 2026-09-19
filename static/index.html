@@ -1,0 +1,173 @@
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+<title>Panic sensor — Tier 0</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; min-height: 100vh; font-family: system-ui, sans-serif;
+    background: #0b0f17; color: #e7ecf3;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: space-between; padding: 24px; gap: 16px;
+  }
+  h1 { font-size: 17px; font-weight: 600; opacity: .7; margin: 0; letter-spacing: .3px; }
+  #status { font-size: 13px; opacity: .55; min-height: 18px; text-align: center; }
+
+  .stage { flex: 1; display: flex; align-items: center; justify-content: center; width: 100%; }
+  #circle {
+    width: 150px; height: 150px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #3b6ea5, #1b2a44);
+    box-shadow: 0 0 60px rgba(80,140,220,.35);
+    transform: scale(.55); transition: transform 4s ease-in-out;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; opacity: .9;
+  }
+  #circle.big { transform: scale(1.15); }
+
+  .meter { width: 100%; max-width: 340px; }
+  .meter .track { height: 14px; border-radius: 8px; background: #1a2332; overflow: hidden; }
+  .meter .fill { height: 100%; width: 0%; border-radius: 8px;
+    background: linear-gradient(90deg,#3ba55d,#e5b23b 55%,#e0533b);
+    transition: width .25s ease; }
+  .meter .row { display: flex; justify-content: space-between; font-size: 12px;
+    opacity: .6; margin-top: 6px; }
+  #prob { font-variant-numeric: tabular-nums; }
+
+  .btns { display: flex; gap: 10px; width: 100%; max-width: 340px; }
+  button {
+    flex: 1; padding: 16px; font-size: 16px; font-weight: 600; border: 0;
+    border-radius: 12px; background: #2a63c7; color: #fff;
+  }
+  button.ghost { background: #1a2332; color: #cdd6e4; }
+  button:active { filter: brightness(1.15); }
+</style>
+
+<h1>PANIC SENSOR — TIER&nbsp;0</h1>
+
+<div class="stage"><div id="circle">ready</div></div>
+
+<div class="meter">
+  <div class="track"><div class="fill" id="fill"></div></div>
+  <div class="row"><span>agitation</span><span id="prob">—</span></div>
+</div>
+
+<div id="status">tap Start, then allow motion access</div>
+
+<div class="btns">
+  <button id="start">Start</button>
+  <button id="test" class="ghost">Test breathing</button>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const setStatus = (t) => ($("status").textContent = t);
+
+// ---- paced-breathing pacer: visual + vibration (Android) + audio (all) -----
+class Breather {
+  constructor() { this.running = false; this.audio = null; }
+  ensureAudio() {
+    if (!this.audio) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (AC) this.audio = new AC();
+    }
+    if (this.audio && this.audio.state === "suspended") this.audio.resume();
+  }
+  start(inhale, exhale) {
+    if (this.running) return;
+    this.running = true; this.inhale = inhale; this.exhale = exhale;
+    this.ensureAudio();
+    setStatus(`breathe with it — in ${inhale}s · out ${exhale}s`);
+    this.loop();
+  }
+  stop() {
+    this.running = false;
+    $("circle").className = ""; $("circle").style.transform = "scale(.55)";
+    $("circle").textContent = "calm";
+    if (navigator.vibrate) navigator.vibrate(0);
+  }
+  cue(kind, secs) {
+    // haptic (no-op on iOS Safari, which lacks the Vibration API)
+    if (navigator.vibrate) {
+      navigator.vibrate(kind === "in" ? [120, 80, 120] : Math.min(secs * 1000, 4000));
+    }
+    // audio swell: rising on inhale, falling on exhale (cross-platform cue)
+    if (this.audio) {
+      const t = this.audio.currentTime, osc = this.audio.createOscillator(),
+            g = this.audio.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(kind === "in" ? 196 : 262, t);
+      osc.frequency.linearRampToValueAtTime(kind === "in" ? 262 : 175, t + secs);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.06, t + secs * 0.4);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + secs);
+      osc.connect(g).connect(this.audio.destination);
+      osc.start(t); osc.stop(t + secs + 0.05);
+    }
+  }
+  phase(kind, secs) {
+    const c = $("circle");
+    c.style.transitionDuration = secs + "s";
+    c.textContent = kind === "in" ? "breathe in" : "breathe out";
+    c.className = kind === "in" ? "big" : "";
+    this.cue(kind, secs);
+    return new Promise((r) => setTimeout(r, secs * 1000));
+  }
+  async loop() {
+    while (this.running) {
+      await this.phase("in", this.inhale);
+      if (!this.running) break;
+      await this.phase("out", this.exhale);
+    }
+  }
+}
+const breather = new Breather();
+
+// ---- sensor streaming --------------------------------------------------------
+let ws = null, batch = [];
+
+function connect() {
+  ws = new WebSocket(`wss://${location.host}/ws`);
+  ws.onopen = () => setStatus("connected — sensing");
+  ws.onclose = () => setStatus("disconnected");
+  ws.onerror = () => setStatus("connection error");
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "state") {
+      $("fill").style.width = Math.round(m.prob * 100) + "%";
+      $("prob").textContent = m.prob.toFixed(2);
+    } else if (m.type === "breathe") {
+      m.action === "start" ? breather.start(m.inhale, m.exhale) : breather.stop();
+    }
+  };
+}
+
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity || e.acceleration;
+  if (!a || a.x == null) return;
+  batch.push([a.x, a.y, a.z]);
+}
+
+// flush buffered samples ~12x/sec to keep the socket light
+setInterval(() => {
+  if (ws && ws.readyState === 1 && batch.length) {
+    ws.send(JSON.stringify({ type: "accel", s: batch }));
+    batch = [];
+  }
+}, 80);
+
+async function start() {
+  breather.ensureAudio(); // unlock audio inside the user gesture
+  if (typeof DeviceMotionEvent !== "undefined" &&
+      typeof DeviceMotionEvent.requestPermission === "function") {
+    try {
+      const res = await DeviceMotionEvent.requestPermission();
+      if (res !== "granted") { setStatus("motion permission denied"); return; }
+    } catch { setStatus("motion permission error"); return; }
+  }
+  window.addEventListener("devicemotion", onMotion);
+  connect();
+  $("circle").textContent = "sensing";
+}
+
+$("start").onclick = start;
+$("test").onclick = () => { breather.ensureAudio(); breather.start(4, 6); };
+</script>
