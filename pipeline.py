@@ -8,11 +8,15 @@ accuracy is borrowed, not yet earned on real panic data. Swap in real,
 per-person data later; the rest of the pipeline stays the same.
 """
 
+import os
 from collections import deque
 
+import joblib
 import numpy as np
 from scipy import stats
 from sklearn.ensemble import RandomForestClassifier
+
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "data", "model.joblib")
 
 # ---- constants (kept identical for training AND inference so the feature
 #      space is consistent even though FS is a nominal assumption) ----------
@@ -112,17 +116,37 @@ def _make_synthetic(n_per_class=400, seed=7):
     return np.array(X), np.array(y)
 
 
+def train_synthetic_model():
+    X, y = _make_synthetic()
+    model = RandomForestClassifier(
+        n_estimators=200, max_depth=8, random_state=7, n_jobs=-1
+    )
+    model.fit(X, y)
+    return model
+
+
 class Classifier:
     """Random Forest -> agitation probability. Lightweight, interpretable,
-    resistant to overfitting on small data, gives a graded probability."""
+    resistant to overfitting on small data, gives a graded probability.
 
-    def __init__(self):
-        X, y = _make_synthetic()
-        self.model = RandomForestClassifier(
-            n_estimators=200, max_depth=8, random_state=7, n_jobs=-1
-        )
-        self.model.fit(X, y)
-        self.train_acc = self.model.score(X, y)
+    Loads a REAL model from data/model.joblib if train.py has produced one;
+    otherwise falls back to the synthetic placeholder. `self.source` records
+    which is active so the rest of the system can be honest about it. There is
+    deliberately no `train_acc` here: the synthetic model's fit accuracy is
+    meaningless (~1.0 on separable synthetic data) and reporting it would be
+    misleading. Real, held-out metrics come only from `train.py`.
+    """
+
+    def __init__(self, model_path=MODEL_PATH):
+        if model_path and os.path.exists(model_path):
+            bundle = joblib.load(model_path)
+            self.model = bundle["model"]
+            self.meta = bundle.get("meta", {})
+            self.source = "real (data/model.joblib)"
+        else:
+            self.model = train_synthetic_model()
+            self.meta = {}
+            self.source = "synthetic placeholder"
 
     def prob(self, win):
         f = extract_features(win).reshape(1, -1)

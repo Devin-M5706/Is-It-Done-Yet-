@@ -9,6 +9,14 @@ env/
 cert.pem
 key.pem
 
+# captured personal accelerometer data + trained model (regenerate locally)
+data/*.csv
+data/model.joblib
+
+# claude-code-eyes captured frames + local camera config
+.claude-code-eyes/
+.cce.env
+
 # OS / editor
 .DS_Store
 .vscode/

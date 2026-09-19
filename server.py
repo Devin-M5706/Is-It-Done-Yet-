@@ -11,6 +11,7 @@ Then open  https://<your-lan-ip>:8443  on the phone (accept the cert warning).
 """
 
 import asyncio
+import csv
 import datetime
 import ipaddress
 import json
@@ -28,6 +29,8 @@ EXHALE = 6.0
 
 HERE = pathlib.Path(__file__).parent
 STATIC = HERE / "static"
+DATA = HERE / "data"
+DATA.mkdir(exist_ok=True)
 PORT = 8443
 
 CLF = Classifier()
@@ -90,6 +93,43 @@ def print_bar(prob, triggered):
     print(f"\ragitation [{bar}] {prob:0.2f}{flag}   ", end="", flush=True)
 
 
+class Capture:
+    """Writes labeled raw accel samples to data/<label>_<timestamp>.csv.
+
+    One recording session = one CSV file = one group. train.py holds out whole
+    sessions, so windows from the same recording never leak across the
+    train/test split -- that's what keeps the reported accuracy honest.
+    """
+
+    def __init__(self):
+        self.writer = self.fh = self.label = self.path = None
+        self.count = 0
+
+    def start(self, label):
+        self.stop()
+        label = "agitated" if str(label).lower().startswith("ag") else "calm"
+        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        self.path = DATA / f"{label}_{ts}.csv"
+        self.fh = open(self.path, "w", newline="")
+        self.writer = csv.writer(self.fh)
+        self.writer.writerow(["ax", "ay", "az"])
+        self.label, self.count = label, 0
+        return self.path
+
+    def add(self, ax, ay, az):
+        if self.writer is not None:
+            self.writer.writerow([ax, ay, az])
+            self.count += 1
+
+    def stop(self):
+        if self.fh is not None:
+            self.fh.close()
+        info = (self.label, self.count, self.path)
+        self.writer = self.fh = self.label = self.path = None
+        self.count = 0
+        return info
+
+
 async def index(request):
     return web.FileResponse(STATIC / "index.html")
 
@@ -98,14 +138,34 @@ async def ws_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     proc = StreamProcessor(CLF)
+    cap = Capture()
     print("\n[+] phone connected")
     async for msg in ws:
         if msg.type != WSMsgType.TEXT:
             continue
         data = json.loads(msg.data)
-        if data.get("type") != "accel":
+        kind = data.get("type")
+
+        if kind == "capture":
+            if data.get("action") == "start":
+                path = cap.start(data.get("label", "calm"))
+                print(f"\n[rec] recording '{cap.label}' -> {path.name}")
+                await ws.send_json({"type": "capture", "state": "recording",
+                                    "label": cap.label})
+            else:
+                label, n, path = cap.stop()
+                if path is not None:
+                    print(f"\n[rec] saved {n} samples -> {path.name}")
+                    await ws.send_json({"type": "capture", "state": "saved",
+                                        "label": label, "samples": n,
+                                        "file": path.name})
             continue
+
+        if kind != "accel":
+            continue
+
         for ax, ay, az in data["s"]:
+            cap.add(ax, ay, az)  # no-op unless recording
             ev = proc.add(ax, ay, az)
             if ev is None:
                 continue
@@ -118,6 +178,8 @@ async def ws_handler(request):
                                         "inhale": INHALE, "exhale": EXHALE})
                 else:
                     await ws.send_json({"type": "breathe", "action": "stop"})
+
+    cap.stop()
     print("\n[-] phone disconnected")
     return ws
 
@@ -134,7 +196,11 @@ def main():
     ctx.load_cert_chain(cert_p, key_p)
 
     print("=" * 56)
-    print(f"  Random Forest trained on synthetic data (acc {CLF.train_acc:0.3f})")
+    print(f"  Classifier model: {CLF.source}")
+    if CLF.source.startswith("synthetic"):
+        print("  (placeholder -- capture real data and run train.py to replace it)")
+    elif CLF.meta:
+        print(f"  training meta: {CLF.meta}")
     print(f"  Open on your phone:  https://{lan_ip}:{PORT}")
     print("  (accept the certificate warning -- it's self-signed)")
     print("=" * 56)

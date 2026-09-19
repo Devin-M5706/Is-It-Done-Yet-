@@ -2,4 +2,7 @@ aiohttp>=3.9
 numpy>=1.24
 scipy>=1.10
 scikit-learn>=1.3
+joblib>=1.3
 cryptography>=41
+# hardware bridge only (ESP32 over BLE); not needed for the phone Tier 0 loop:
+bleak>=0.21
