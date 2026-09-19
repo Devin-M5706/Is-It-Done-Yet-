@@ -41,8 +41,10 @@ pio device monitor -b 115200
 PlatformIO's source discovery requires `main.cpp` in each environment
 directory (it only auto-converts `.ino` files at the `src_dir` root), so the
 sketches are named `wristband/main.cpp` and `plush/main.cpp` with an explicit
-`#include <Arduino.h>`. To open either in Arduino IDE, copy `main.cpp` to
-`<folder>/<folder>.ino` (e.g. `wristband/wristband.ino`); the code is otherwise
+`#include <Arduino.h>`. To build in Arduino IDE, copy `main.cpp` into a **separate**
+sketch folder outside this tree as `<name>/<name>.ino` (e.g.
+`~/Arduino/wristband/wristband.ino`) — never alongside `main.cpp`, or the IDE
+compiles both and fails with duplicate `setup()`/`loop()`. The code is otherwise
 identical. CI runs `pio run` for both envs on every change under `firmware/`
 (`.github/workflows/firmware.yml`).
 
@@ -61,8 +63,8 @@ identical. CI runs `pio run` for both envs on every change under `firmware/`
 ## Flash
 
 1. PlatformIO: `cd firmware && pio run -e wristband -t upload` (or `-e plush`).
-   Arduino IDE: copy `wristband/main.cpp` to `wristband/wristband.ino` (folder name must
-   match), open it, select the board + serial port, upload.
+   Arduino IDE: copy `wristband/main.cpp` to `~/Arduino/wristband/wristband.ino` (separate
+   folder, name must match), open it, select the board + serial port, upload.
 2. After upload, the wristband advertises as **`panic-wrist`**, plush as **`panic-plush`**.
 3. On the laptop: `python ble_bridge.py` (scans for `panic-wrist`).
 

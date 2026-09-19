@@ -10,6 +10,9 @@ on:
       - 'firmware/**'
       - '.github/workflows/firmware.yml'
 
+permissions:
+  contents: read
+
 jobs:
   compile:
     runs-on: ubuntu-latest

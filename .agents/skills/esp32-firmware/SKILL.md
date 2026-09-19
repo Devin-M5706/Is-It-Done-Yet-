@@ -36,7 +36,8 @@ pio device monitor -b 115200
 ```
 
 Arduino IDE equivalent: Boards Manager → install **esp32** (Espressif); board **"ESP32 Dev Module"**;
-copy `wristband/main.cpp` to `wristband/wristband.ino` (folder name must equal sketch name) and open it;
+copy `wristband/main.cpp` to a separate sketch folder `~/Arduino/wristband/wristband.ino` (folder name must equal
+sketch name; never place the `.ino` next to `main.cpp` or the IDE compiles both → duplicate `setup()`/`loop()`) and open it;
 plush additionally needs the **ESP32Servo** library. Wristband needs no external libraries
 (`BLEDevice`, `Wire` ship with the core). Keep `#include <Arduino.h>` — harmless in the IDE, required for PlatformIO.
 
