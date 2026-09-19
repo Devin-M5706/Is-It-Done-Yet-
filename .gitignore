@@ -21,3 +21,6 @@ data/model.joblib
 .DS_Store
 .vscode/
 .idea/
+
+# PlatformIO
+.pio/

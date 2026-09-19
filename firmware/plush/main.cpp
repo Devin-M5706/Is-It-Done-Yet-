@@ -18,6 +18,7 @@
 // Arduino IDE: Board = "ESP32 Dev Module". Install the "ESP32Servo" library.
 // ============================================================================
 
+#include <Arduino.h>
 #include <ESP32Servo.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>

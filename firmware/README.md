@@ -29,6 +29,20 @@ Two sketches, both speaking the same contract as the Python side:
 - Wristband: **no external libraries** — uses built-in `BLEDevice`/`Wire`; the MPU6050 is read via raw I2C registers.
 - Plush: install the **ESP32Servo** library.
 
+### PlatformIO (compile check without hardware)
+
+```bash
+pip install platformio
+cd firmware && pio run
+pio run -e wristband -t upload
+pio device monitor -b 115200
+```
+
+PlatformIO's source discovery requires `main.cpp` in each environment
+directory, so the sketches are named `wristband/main.cpp` and
+`plush/main.cpp`. To open either sketch in Arduino IDE, temporarily rename
+`main.cpp` back to the matching `.ino` filename.
+
 ## Wiring (EXAMPLE pins — change to match the sketches / your board)
 
 **Wristband**
