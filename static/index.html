@@ -1,3 +1,4 @@
+<meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
 <title>Panic sensor — Tier 0</title>
 <style>
@@ -38,8 +39,13 @@
     border-radius: 12px; background: #2a63c7; color: #fff;
   }
   button.ghost { background: #1a2332; color: #cdd6e4; }
-  button.rec { background: #c73a2a; color: #fff; }
   button:active { filter: brightness(1.15); }
+
+  .btns.rec button { touch-action: none; user-select: none; -webkit-user-select: none; }
+  .btns.rec button small { font-size: 11px; font-weight: 400; opacity: .7; }
+  #recCalm.recording { background: #3ba55d; color: #fff; }
+  #recAgit.recording { background: #e0533b; color: #fff; }
+  button:disabled { opacity: .35; }
 </style>
 
 <h1>PANIC SENSOR — TIER&nbsp;0</h1>
@@ -58,9 +64,9 @@
   <button id="test" class="ghost">Test breathing</button>
 </div>
 
-<div class="btns">
-  <button id="recCalm" class="ghost">● Rec calm</button>
-  <button id="recAgit" class="ghost">● Rec agitated</button>
+<div class="btns rec">
+  <button id="recCalm" class="ghost" disabled>Record CALM<br><small>0s</small></button>
+  <button id="recAgit" class="ghost" disabled>Record AGITATED<br><small>0s</small></button>
 </div>
 
 <script>
@@ -132,8 +138,15 @@ let ws = null, batch = [];
 
 function connect() {
   ws = new WebSocket(`wss://${location.host}/ws`);
-  ws.onopen = () => setStatus("connected — sensing");
-  ws.onclose = () => setStatus("disconnected");
+  ws.onopen = () => {
+    setStatus("connected — sensing");
+    $("recCalm").disabled = $("recAgit").disabled = false;
+  };
+  ws.onclose = () => {
+    setStatus("disconnected");
+    $("recCalm").disabled = $("recAgit").disabled = true;
+    stopRec($("recCalm")); stopRec($("recAgit"));
+  };
   ws.onerror = () => setStatus("connection error");
   ws.onmessage = (e) => {
     const m = JSON.parse(e.data);
@@ -142,14 +155,6 @@ function connect() {
       $("prob").textContent = m.prob.toFixed(2);
     } else if (m.type === "breathe") {
       m.action === "start" ? breather.start(m.inhale, m.exhale) : breather.stop();
-    } else if (m.type === "capture") {
-      if (m.state === "recording") {
-        recording = m.label; updateRecUI();
-        setStatus(`recording "${m.label}" — hold that motion`);
-      } else if (m.state === "saved") {
-        recording = null; updateRecUI();
-        setStatus(`saved ${m.samples} samples (${m.label})`);
-      }
     }
   };
 }
@@ -182,30 +187,41 @@ async function start() {
   $("circle").textContent = "sensing";
 }
 
-// ---- data capture -----------------------------------------------------------
-let recording = null; // "calm" | "agitated" | null
-
-function updateRecUI() {
-  const c = $("recCalm"), a = $("recAgit");
-  c.classList.toggle("rec", recording === "calm");
-  a.classList.toggle("rec", recording === "agitated");
-  c.textContent = recording === "calm" ? "■ Stop" : "● Rec calm";
-  a.textContent = recording === "agitated" ? "■ Stop" : "● Rec agitated";
-}
-
-function toggleRec(label) {
-  if (!(ws && ws.readyState === 1)) { setStatus("tap Start first"); return; }
-  if (recording === label) {
-    ws.send(JSON.stringify({ type: "capture", action: "stop" }));
-  } else if (recording) {
-    setStatus("stop the current recording first");
-  } else {
-    ws.send(JSON.stringify({ type: "capture", action: "start", label }));
-  }
-}
-
 $("start").onclick = start;
 $("test").onclick = () => { breather.ensureAudio(); breather.start(4, 6); };
-$("recCalm").onclick = () => toggleRec("calm");
-$("recAgit").onclick = () => toggleRec("agitated");
+
+// ---- hold-to-record labeling: press & hold CALM or AGITATED ---------------
+const recState = new Map(); // btn -> {label, secs, timer}
+
+function recLabel(btn) { return btn.id === "recCalm" ? "calm" : "agitated"; }
+
+function stopRec(btn) {
+  const st = recState.get(btn);
+  if (!st) return;
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "label", value: "none" }));
+  clearInterval(st.timer);
+  recState.delete(btn);
+  btn.classList.remove("recording");
+}
+
+for (const btn of [$("recCalm"), $("recAgit")]) {
+  recState.set(btn, null);
+  let secs = 0;
+  btn.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    if (!ws || ws.readyState !== 1 || recState.get(btn)) return;
+    const label = recLabel(btn);
+    ws.send(JSON.stringify({ type: "label", value: label }));
+    btn.classList.add("recording");
+    const st = { label, timer: setInterval(() => {
+      secs += 0.1;
+      btn.querySelector("small").textContent = secs.toFixed(1) + "s";
+    }, 100) };
+    recState.set(btn, st);
+  });
+  for (const ev of ["pointerup", "pointercancel", "pointerleave"]) {
+    btn.addEventListener(ev, () => stopRec(btn));
+  }
+  btn.addEventListener("contextmenu", (e) => e.preventDefault());
+}
 </script>
