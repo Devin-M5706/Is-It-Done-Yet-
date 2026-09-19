@@ -8,15 +8,13 @@ accuracy is borrowed, not yet earned on real panic data. Swap in real,
 per-person data later; the rest of the pipeline stays the same.
 """
 
-import os
-from collections import deque
+import pathlib
+from collections import Counter, deque
 
 import joblib
 import numpy as np
 from scipy import stats
 from sklearn.ensemble import RandomForestClassifier
-
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "data", "model.joblib")
 
 # ---- constants (kept identical for training AND inference so the feature
 #      space is consistent even though FS is a nominal assumption) ----------
@@ -30,6 +28,20 @@ HIGH = 0.60          # prob above this counts as an "agitated" window
 LOW = 0.35           # prob below this counts as a "calm" window
 K_TRIGGER = 4        # consecutive agitated windows required to fire (~2s)
 K_RELEASE = 4        # consecutive calm windows required to stand down
+
+# real-data model artifacts (see retrain.py)
+DATA_DIR = pathlib.Path(__file__).parent / "data"
+MODEL_PATH = DATA_DIR / "model.joblib"
+
+RF_PARAMS = dict(n_estimators=200, max_depth=8, random_state=7, n_jobs=-1)
+
+# feature names, in extract_features() order
+FEATURE_NAMES = [
+    "mag_std", "mag_var", "ax_std", "ay_std", "az_std",
+    "mag_skew", "mag_kurtosis", "mean_jerk",
+    "band_0.5_3hz", "band_3_8hz", "band_8_20hz", "dominant_freq",
+    "corr_xy", "corr_xz", "corr_yz",
+]
 
 
 def _moving_average(x, k):
@@ -80,14 +92,10 @@ def extract_features(win):
     return np.array(feats, dtype=float)
 
 
-def _make_synthetic(n_per_class=400, seed=7):
-    """Generate calm vs agitated windows. Placeholder data until real panic
-    signals exist -- see module docstring."""
-    rng = np.random.default_rng(seed)
-    X, y = [], []
+def synthetic_window(rng, label):
+    """One raw (WINDOW_N, 3) synthetic window. label 0 = calm, 1 = agitated."""
     t = np.arange(WINDOW_N) / FS
-
-    for _ in range(n_per_class):
+    if label == 0:
         # CALM: low-amplitude, low-frequency, smooth, coherent sway
         amp = rng.uniform(0.02, 0.08)
         f = rng.uniform(0.1, 0.5)
@@ -96,57 +104,59 @@ def _make_synthetic(n_per_class=400, seed=7):
         win = np.stack([base, base * 0.8, base * 0.6], axis=1)
         win += rng.normal(0, 0.01, win.shape)
         win += rng.uniform(-1, 1, 3)  # random gravity offset
-        X.append(extract_features(win)); y.append(0)
+        return win
 
-        # AGITATED: high-amplitude, 3-10 Hz energy, spiky, incoherent axes
-        amp = rng.uniform(0.2, 0.8)
-        f = rng.uniform(3.0, 10.0)
-        win = np.stack([
-            amp * np.sin(2 * np.pi * f * t + rng.uniform(0, 2 * np.pi))
-            for _ in range(3)
-        ], axis=1)
-        win += rng.normal(0, 0.08, win.shape)
-        spikes = rng.integers(3, 9)
-        for _ in range(spikes):  # impulses -> high kurtosis
-            idx = rng.integers(0, WINDOW_N)
-            win[idx] += rng.uniform(-1.5, 1.5, 3)
-        win += rng.uniform(-1, 1, 3)
-        X.append(extract_features(win)); y.append(1)
+    # AGITATED: high-amplitude, 3-10 Hz energy, spiky, incoherent axes
+    amp = rng.uniform(0.2, 0.8)
+    f = rng.uniform(3.0, 10.0)
+    win = np.stack([
+        amp * np.sin(2 * np.pi * f * t + rng.uniform(0, 2 * np.pi))
+        for _ in range(3)
+    ], axis=1)
+    win += rng.normal(0, 0.08, win.shape)
+    spikes = rng.integers(3, 9)
+    for _ in range(spikes):  # impulses -> high kurtosis
+        idx = rng.integers(0, WINDOW_N)
+        win[idx] += rng.uniform(-1.5, 1.5, 3)
+    win += rng.uniform(-1, 1, 3)
+    return win
 
+
+def _make_synthetic(n_per_class=400, seed=7):
+    """Generate calm vs agitated windows. Placeholder data until real panic
+    signals exist -- see module docstring."""
+    rng = np.random.default_rng(seed)
+    X, y = [], []
+    for _ in range(n_per_class):
+        X.append(extract_features(synthetic_window(rng, 0))); y.append(0)
+        X.append(extract_features(synthetic_window(rng, 1))); y.append(1)
     return np.array(X), np.array(y)
-
-
-def train_synthetic_model():
-    X, y = _make_synthetic()
-    model = RandomForestClassifier(
-        n_estimators=200, max_depth=8, random_state=7, n_jobs=-1
-    )
-    model.fit(X, y)
-    return model
 
 
 class Classifier:
     """Random Forest -> agitation probability. Lightweight, interpretable,
-    resistant to overfitting on small data, gives a graded probability.
-
-    Loads a REAL model from data/model.joblib if train.py has produced one;
-    otherwise falls back to the synthetic placeholder. `self.source` records
-    which is active so the rest of the system can be honest about it. There is
-    deliberately no `train_acc` here: the synthetic model's fit accuracy is
-    meaningless (~1.0 on separable synthetic data) and reporting it would be
-    misleading. Real, held-out metrics come only from `train.py`.
-    """
+    resistant to overfitting on small data, gives a graded probability."""
 
     def __init__(self, model_path=MODEL_PATH):
-        if model_path and os.path.exists(model_path):
+        if model_path is not None and pathlib.Path(model_path).exists():
+            model_path = pathlib.Path(model_path)
             bundle = joblib.load(model_path)
             self.model = bundle["model"]
-            self.meta = bundle.get("meta", {})
-            self.source = "real (data/model.joblib)"
+            self.train_acc = bundle.get("train_acc")
+            self.source = (
+                f"real data ({bundle.get('n_windows')} windows, "
+                f"{bundle.get('n_recordings')} recordings, {model_path.name})"
+            )
         else:
-            self.model = train_synthetic_model()
-            self.meta = {}
-            self.source = "synthetic placeholder"
+            X, y = _make_synthetic()
+            self.model = RandomForestClassifier(**RF_PARAMS)
+            self.model.fit(X, y)
+            self.train_acc = self.model.score(X, y)
+            self.source = "synthetic data"
+
+    def describe(self):
+        acc = f"{self.train_acc:0.3f}" if self.train_acc is not None else "n/a"
+        return f"Random Forest trained on {self.source} (train acc {acc})"
 
     def prob(self, win):
         f = extract_features(win).reshape(1, -1)
@@ -184,3 +194,34 @@ class StreamProcessor:
             self.triggered, changed, self.hi_run = False, True, 0
 
         return {"prob": prob, "triggered": self.triggered, "trigger_changed": changed}
+
+
+def iter_windows(samples, labels=None):
+    """Replay a recorded sample stream through the exact live windowing path
+    (StreamProcessor + HOP_N stepping) and yield each window.
+
+    samples: iterable of (ax, ay, az). labels: optional iterable of per-sample
+    label strings ("calm"/"agitated"/"none"); the window's label is the
+    majority label over the WINDOW_N buffered samples (None if not given).
+    """
+    class _Recorder:
+        def __init__(self):
+            self.win = None
+
+        def prob(self, win):
+            self.win = np.array(win)
+            return 0.0
+
+    rec = _Recorder()
+    proc = StreamProcessor(rec)
+    label_buf = deque(maxlen=WINDOW_N)
+    for i, (ax, ay, az) in enumerate(samples):
+        if labels is not None:
+            label_buf.append(labels[i])
+        ev = proc.add(ax, ay, az)
+        if ev is None:
+            continue
+        if labels is None:
+            yield rec.win, None
+        else:
+            yield rec.win, Counter(label_buf).most_common(1)[0][0]

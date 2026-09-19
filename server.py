@@ -10,14 +10,16 @@ Run:  python server.py
 Then open  https://<your-lan-ip>:8443  on the phone (accept the cert warning).
 """
 
+import argparse
 import asyncio
-import csv
 import datetime
 import ipaddress
 import json
 import pathlib
+import secrets
 import socket
 import ssl
+import time
 
 from aiohttp import WSMsgType, web
 
@@ -29,11 +31,10 @@ EXHALE = 6.0
 
 HERE = pathlib.Path(__file__).parent
 STATIC = HERE / "static"
-DATA = HERE / "data"
-DATA.mkdir(exist_ok=True)
 PORT = 8443
 
 CLF = Classifier()
+CAPTURE = False  # --capture: record every accel frame, even unlabeled
 
 
 def get_lan_ip():
@@ -93,43 +94,6 @@ def print_bar(prob, triggered):
     print(f"\ragitation [{bar}] {prob:0.2f}{flag}   ", end="", flush=True)
 
 
-class Capture:
-    """Writes labeled raw accel samples to data/<label>_<timestamp>.csv.
-
-    One recording session = one CSV file = one group. train.py holds out whole
-    sessions, so windows from the same recording never leak across the
-    train/test split -- that's what keeps the reported accuracy honest.
-    """
-
-    def __init__(self):
-        self.writer = self.fh = self.label = self.path = None
-        self.count = 0
-
-    def start(self, label):
-        self.stop()
-        label = "agitated" if str(label).lower().startswith("ag") else "calm"
-        ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        self.path = DATA / f"{label}_{ts}.csv"
-        self.fh = open(self.path, "w", newline="")
-        self.writer = csv.writer(self.fh)
-        self.writer.writerow(["ax", "ay", "az"])
-        self.label, self.count = label, 0
-        return self.path
-
-    def add(self, ax, ay, az):
-        if self.writer is not None:
-            self.writer.writerow([ax, ay, az])
-            self.count += 1
-
-    def stop(self):
-        if self.fh is not None:
-            self.fh.close()
-        info = (self.label, self.count, self.path)
-        self.writer = self.fh = self.label = self.path = None
-        self.count = 0
-        return info
-
-
 async def index(request):
     return web.FileResponse(STATIC / "index.html")
 
@@ -138,53 +102,61 @@ async def ws_handler(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     proc = StreamProcessor(CLF)
-    cap = Capture()
+    session_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
+    label = None
+    rec_path = HERE / "data" / "raw" / f"{session_id}.jsonl"
+    rec_f = None
     print("\n[+] phone connected")
-    async for msg in ws:
-        if msg.type != WSMsgType.TEXT:
-            continue
-        data = json.loads(msg.data)
-        kind = data.get("type")
-
-        if kind == "capture":
-            if data.get("action") == "start":
-                path = cap.start(data.get("label", "calm"))
-                print(f"\n[rec] recording '{cap.label}' -> {path.name}")
-                await ws.send_json({"type": "capture", "state": "recording",
-                                    "label": cap.label})
-            else:
-                label, n, path = cap.stop()
-                if path is not None:
-                    print(f"\n[rec] saved {n} samples -> {path.name}")
-                    await ws.send_json({"type": "capture", "state": "saved",
-                                        "label": label, "samples": n,
-                                        "file": path.name})
-            continue
-
-        if kind != "accel":
-            continue
-
-        for ax, ay, az in data["s"]:
-            cap.add(ax, ay, az)  # no-op unless recording
-            ev = proc.add(ax, ay, az)
-            if ev is None:
+    try:
+        async for msg in ws:
+            if msg.type != WSMsgType.TEXT:
                 continue
-            print_bar(ev["prob"], ev["triggered"])
-            await ws.send_json({"type": "state", "prob": ev["prob"],
-                                "triggered": ev["triggered"]})
-            if ev["trigger_changed"]:
-                if ev["triggered"]:
-                    await ws.send_json({"type": "breathe", "action": "start",
-                                        "inhale": INHALE, "exhale": EXHALE})
-                else:
-                    await ws.send_json({"type": "breathe", "action": "stop"})
-
-    cap.stop()
+            data = json.loads(msg.data)
+            if data.get("type") == "label":
+                value = data.get("value")
+                label = value if value in ("calm", "agitated") else None
+                print(f"\n[rec] label={label}")
+                continue
+            if data.get("type") != "accel":
+                continue
+            rec_label = label if label is not None else ("none" if CAPTURE else None)
+            if rec_label is not None:
+                if rec_f is None:
+                    rec_path.parent.mkdir(parents=True, exist_ok=True)
+                    rec_f = open(rec_path, "a")
+                rec_f.write(json.dumps(
+                    {"t": int(time.time() * 1000), "label": rec_label, "s": data["s"]}
+                ) + "\n")
+                rec_f.flush()
+            for ax, ay, az in data["s"]:
+                ev = proc.add(ax, ay, az)
+                if ev is None:
+                    continue
+                print_bar(ev["prob"], ev["triggered"])
+                await ws.send_json({"type": "state", "prob": ev["prob"],
+                                    "triggered": ev["triggered"]})
+                if ev["trigger_changed"]:
+                    if ev["triggered"]:
+                        await ws.send_json({"type": "breathe", "action": "start",
+                                            "inhale": INHALE, "exhale": EXHALE})
+                    else:
+                        await ws.send_json({"type": "breathe", "action": "stop"})
+    finally:
+        if rec_f is not None:
+            rec_f.close()
     print("\n[-] phone disconnected")
     return ws
 
 
 def main():
+    global CAPTURE
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--capture", action="store_true",
+                        help="record all accel frames to data/raw "
+                             "(label 'none' when unlabeled); otherwise only "
+                             "labeled frames are written")
+    CAPTURE = parser.parse_args().capture
+
     app = web.Application()
     app.router.add_get("/", index)
     app.router.add_get("/ws", ws_handler)
@@ -196,11 +168,7 @@ def main():
     ctx.load_cert_chain(cert_p, key_p)
 
     print("=" * 56)
-    print(f"  Classifier model: {CLF.source}")
-    if CLF.source.startswith("synthetic"):
-        print("  (placeholder -- capture real data and run train.py to replace it)")
-    elif CLF.meta:
-        print(f"  training meta: {CLF.meta}")
+    print(f"  {CLF.describe()}")
     print(f"  Open on your phone:  https://{lan_ip}:{PORT}")
     print("  (accept the certificate warning -- it's self-signed)")
     print("=" * 56)

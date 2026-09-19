@@ -10,7 +10,6 @@ cert.pem
 key.pem
 
 # captured personal accelerometer data + trained model (regenerate locally)
-data/*.csv
 data/model.joblib
 
 # claude-code-eyes captured frames + local camera config
@@ -21,3 +20,9 @@ data/model.joblib
 .DS_Store
 .vscode/
 .idea/
+
+# captured data + trained artifacts (retrain.py)
+data/raw/*
+!data/raw/.gitkeep
+data/model.joblib
+data/RETRAIN_REPORT.md
