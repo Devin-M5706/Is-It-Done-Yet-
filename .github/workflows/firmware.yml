@@ -25,6 +25,6 @@ jobs:
         with:
           path: ~/.platformio
           key: ${{ runner.os }}-pio-${{ hashFiles('firmware/platformio.ini') }}
-      - run: pip install --only-binary :all: platformio==6.2.0
+      - run: pip install --only-binary ":all:" platformio==6.2.0
       - run: pio run
         working-directory: firmware
