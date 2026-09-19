@@ -11,8 +11,8 @@ Two sketches, both speaking the same contract as the Python side:
 
 | Sketch | Board role | Talks to |
 |--------|-----------|----------|
-| `wristband/wristband.ino` | MPU6050 → BLE accel stream; BLE breathe cmd → haptic | `ble_bridge.py` |
-| `plush/plush.ino` | BLE plush-state → 2 ear servos + heartbeat motor | brain (to be wired) |
+| `wristband/main.cpp` | MPU6050 → BLE accel stream; BLE breathe cmd → haptic | `ble_bridge.py` |
+| `plush/main.cpp` | BLE plush-state → 2 ear servos + heartbeat motor | brain (to be wired) |
 
 ## BLE contract (matches `ble_bridge.py`)
 
@@ -29,6 +29,25 @@ Two sketches, both speaking the same contract as the Python side:
 - Wristband: **no external libraries** — uses built-in `BLEDevice`/`Wire`; the MPU6050 is read via raw I2C registers.
 - Plush: install the **ESP32Servo** library.
 
+### PlatformIO (compile check without hardware)
+
+```bash
+pip install platformio
+cd firmware && pio run
+pio run -e wristband -t upload
+pio device monitor -b 115200
+```
+
+PlatformIO's source discovery requires `main.cpp` in each environment
+directory (it only auto-converts `.ino` files at the `src_dir` root), so the
+sketches are named `wristband/main.cpp` and `plush/main.cpp` with an explicit
+`#include <Arduino.h>`. To build in Arduino IDE, copy `main.cpp` into a **separate**
+sketch folder outside this tree as `<name>/<name>.ino` (e.g.
+`~/Arduino/wristband/wristband.ino`) — never alongside `main.cpp`, or the IDE
+compiles both and fails with duplicate `setup()`/`loop()`. The code is otherwise
+identical. CI runs `pio run` for both envs on every change under `firmware/`
+(`.github/workflows/firmware.yml`).
+
 ## Wiring (EXAMPLE pins — change to match the sketches / your board)
 
 **Wristband**
@@ -43,8 +62,10 @@ Two sketches, both speaking the same contract as the Python side:
 
 ## Flash
 
-1. Open the `.ino` in Arduino IDE, select the board + serial port.
-2. Upload. Wristband advertises as **`panic-wrist`**, plush as **`panic-plush`**.
+1. PlatformIO: `cd firmware && pio run -e wristband -t upload` (or `-e plush`).
+   Arduino IDE: copy `wristband/main.cpp` to `~/Arduino/wristband/wristband.ino` (separate
+   folder, name must match), open it, select the board + serial port, upload.
+2. After upload, the wristband advertises as **`panic-wrist`**, plush as **`panic-plush`**.
 3. On the laptop: `python ble_bridge.py` (scans for `panic-wrist`).
 
 ## Verify before you trust it
@@ -53,4 +74,4 @@ Two sketches, both speaking the same contract as the Python side:
   and confirm the board's LED / any display before power-on and while it runs.
 - Sanity-check the accel stream in `ble_bridge.py`'s live bar: still wrist ≈ low,
   vigorous shake ≈ high. If axes look swapped or scaled wrong, fix `LSB_PER_G` /
-  the packing in `wristband.ino` first.
+  the packing in `wristband/main.cpp` first.

@@ -60,7 +60,7 @@ score at all if you have fewer than 2 recordings per class.
 The phone loop and the wristband speak the **same contract**, so hardware is a
 drop-in swap, not a rewrite:
 
-1. Flash `firmware/wristband/wristband.ino` (see `firmware/README.md`).
+1. Flash `firmware/wristband/main.cpp` (see `firmware/README.md`).
 2. `pip install bleak`, then `python ble_bridge.py` — it feeds the ESP32's BLE
    accel stream into the *same* `StreamProcessor` and writes breathe commands back.
 

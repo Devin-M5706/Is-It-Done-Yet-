@@ -19,6 +19,7 @@
 // raw I2C registers to keep dependencies at zero).
 // ============================================================================
 
+#include <Arduino.h>
 #include <Wire.h>
 #include <BLEDevice.h>
 #include <BLEServer.h>
