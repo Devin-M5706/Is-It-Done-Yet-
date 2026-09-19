@@ -29,7 +29,22 @@ SMOOTH_K = 5         # moving-average kernel (kills sensor hash)
 HIGH = 0.60          # prob above this counts as an "agitated" window
 LOW = 0.35           # prob below this counts as a "calm" window
 K_TRIGGER = 4        # consecutive agitated windows required to fire (~2s)
-K_RELEASE = 4        # consecutive calm windows required to stand down
+K_RELEASE = 4        # clearly-calm windows required to stand down (~2s)
+
+# A window in the dead band (LOW < prob < HIGH) is not evidence of calm, but it
+# is not evidence of agitation either -- so it must still stand the trigger down
+# eventually, just more slowly than real calm does. Without this, a probability
+# parked in the dead band pins `triggered` on forever: it never reaches HIGH to
+# re-arm and never reaches LOW to release, so the phone's breathing UI can never
+# stop. Release is therefore driven by the ABSENCE of agitation, not by the
+# presence of calm.
+K_AMBIG_RELEASE = 12  # dead-band windows required to stand down (~6s)
+
+# Scored in integer credit units so the arithmetic is exact: a float 4/12
+# accumulator sums to 3.999... and would demand a 13th window, not a 12th.
+_CALM_CREDIT = K_AMBIG_RELEASE                 # earned by a clearly-calm window
+_AMBIG_CREDIT = K_RELEASE                      # earned by a dead-band window
+_RELEASE_UNITS = K_RELEASE * K_AMBIG_RELEASE   # units needed to stand down
 
 
 def _moving_average(x, k):
@@ -162,7 +177,7 @@ class StreamProcessor:
         self.buf = deque(maxlen=WINDOW_N)
         self.since_last = 0
         self.hi_run = 0
-        self.lo_run = 0
+        self.release = 0
         self.triggered = False
 
     def add(self, ax, ay, az):
@@ -174,13 +189,24 @@ class StreamProcessor:
 
         prob = self.clf.prob(np.array(self.buf))
 
-        # persistence + hysteresis
+        # persistence: only sustained agitation is allowed to fire the trigger
         self.hi_run = self.hi_run + 1 if prob >= HIGH else 0
-        self.lo_run = self.lo_run + 1 if prob <= LOW else 0
+
+        # release: accrue credit for every window that is not agitated. Clear
+        # calm earns full credit, a dead-band window earns partial credit, and
+        # renewed agitation wipes the progress. Partial credit is what keeps the
+        # dead band from pinning the trigger on indefinitely.
+        if prob >= HIGH:
+            self.release = 0
+        elif prob <= LOW:
+            self.release += _CALM_CREDIT
+        else:
+            self.release += _AMBIG_CREDIT
+
         changed = False
         if not self.triggered and self.hi_run >= K_TRIGGER:
-            self.triggered, changed, self.lo_run = True, True, 0
-        elif self.triggered and self.lo_run >= K_RELEASE:
+            self.triggered, changed, self.release = True, True, 0
+        elif self.triggered and self.release >= _RELEASE_UNITS:
             self.triggered, changed, self.hi_run = False, True, 0
 
         return {"prob": prob, "triggered": self.triggered, "trigger_changed": changed}
