@@ -94,6 +94,13 @@ def print_bar(prob, triggered):
     print(f"\ragitation [{bar}] {prob:0.2f}{flag}   ", end="", flush=True)
 
 
+def _append_frame(path, label, samples):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps({"t": int(time.time() * 1000), "label": label,
+                            "s": samples}) + "\n")
+
+
 async def index(request):
     return web.FileResponse(STATIC / "index.html")
 
@@ -105,45 +112,34 @@ async def ws_handler(request):
     session_id = datetime.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
     label = None
     rec_path = HERE / "data" / "raw" / f"{session_id}.jsonl"
-    rec_f = None
     print("\n[+] phone connected")
-    try:
-        async for msg in ws:
-            if msg.type != WSMsgType.TEXT:
+    async for msg in ws:
+        if msg.type != WSMsgType.TEXT:
+            continue
+        data = json.loads(msg.data)
+        if data.get("type") == "label":
+            value = data.get("value")
+            label = value if value in ("calm", "agitated") else None
+            print(f"\n[rec] label={label}")
+            continue
+        if data.get("type") != "accel":
+            continue
+        rec_label = label if label is not None else ("none" if CAPTURE else None)
+        if rec_label is not None:
+            await asyncio.to_thread(_append_frame, rec_path, rec_label, data["s"])
+        for ax, ay, az in data["s"]:
+            ev = proc.add(ax, ay, az)
+            if ev is None:
                 continue
-            data = json.loads(msg.data)
-            if data.get("type") == "label":
-                value = data.get("value")
-                label = value if value in ("calm", "agitated") else None
-                print(f"\n[rec] label={label}")
-                continue
-            if data.get("type") != "accel":
-                continue
-            rec_label = label if label is not None else ("none" if CAPTURE else None)
-            if rec_label is not None:
-                if rec_f is None:
-                    rec_path.parent.mkdir(parents=True, exist_ok=True)
-                    rec_f = open(rec_path, "a")
-                rec_f.write(json.dumps(
-                    {"t": int(time.time() * 1000), "label": rec_label, "s": data["s"]}
-                ) + "\n")
-                rec_f.flush()
-            for ax, ay, az in data["s"]:
-                ev = proc.add(ax, ay, az)
-                if ev is None:
-                    continue
-                print_bar(ev["prob"], ev["triggered"])
-                await ws.send_json({"type": "state", "prob": ev["prob"],
-                                    "triggered": ev["triggered"]})
-                if ev["trigger_changed"]:
-                    if ev["triggered"]:
-                        await ws.send_json({"type": "breathe", "action": "start",
-                                            "inhale": INHALE, "exhale": EXHALE})
-                    else:
-                        await ws.send_json({"type": "breathe", "action": "stop"})
-    finally:
-        if rec_f is not None:
-            rec_f.close()
+            print_bar(ev["prob"], ev["triggered"])
+            await ws.send_json({"type": "state", "prob": ev["prob"],
+                                "triggered": ev["triggered"]})
+            if ev["trigger_changed"]:
+                if ev["triggered"]:
+                    await ws.send_json({"type": "breathe", "action": "start",
+                                        "inhale": INHALE, "exhale": EXHALE})
+                else:
+                    await ws.send_json({"type": "breathe", "action": "stop"})
     print("\n[-] phone disconnected")
     return ws
 
