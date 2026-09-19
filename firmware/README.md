@@ -11,8 +11,8 @@ Two sketches, both speaking the same contract as the Python side:
 
 | Sketch | Board role | Talks to |
 |--------|-----------|----------|
-| `wristband/wristband.ino` | MPU6050 → BLE accel stream; BLE breathe cmd → haptic | `ble_bridge.py` |
-| `plush/plush.ino` | BLE plush-state → 2 ear servos + heartbeat motor | brain (to be wired) |
+| `wristband/main.cpp` | MPU6050 → BLE accel stream; BLE breathe cmd → haptic | `ble_bridge.py` |
+| `plush/main.cpp` | BLE plush-state → 2 ear servos + heartbeat motor | brain (to be wired) |
 
 ## BLE contract (matches `ble_bridge.py`)
 
@@ -39,9 +39,12 @@ pio device monitor -b 115200
 ```
 
 PlatformIO's source discovery requires `main.cpp` in each environment
-directory, so the sketches are named `wristband/main.cpp` and
-`plush/main.cpp`. To open either sketch in Arduino IDE, temporarily rename
-`main.cpp` back to the matching `.ino` filename.
+directory (it only auto-converts `.ino` files at the `src_dir` root), so the
+sketches are named `wristband/main.cpp` and `plush/main.cpp` with an explicit
+`#include <Arduino.h>`. To open either in Arduino IDE, copy `main.cpp` to
+`<folder>/<folder>.ino` (e.g. `wristband/wristband.ino`); the code is otherwise
+identical. CI runs `pio run` for both envs on every change under `firmware/`
+(`.github/workflows/firmware.yml`).
 
 ## Wiring (EXAMPLE pins — change to match the sketches / your board)
 
@@ -57,8 +60,10 @@ directory, so the sketches are named `wristband/main.cpp` and
 
 ## Flash
 
-1. Open the `.ino` in Arduino IDE, select the board + serial port.
-2. Upload. Wristband advertises as **`panic-wrist`**, plush as **`panic-plush`**.
+1. PlatformIO: `cd firmware && pio run -e wristband -t upload` (or `-e plush`).
+   Arduino IDE: copy `wristband/main.cpp` to `wristband/wristband.ino` (folder name must
+   match), open it, select the board + serial port, upload.
+2. After upload, the wristband advertises as **`panic-wrist`**, plush as **`panic-plush`**.
 3. On the laptop: `python ble_bridge.py` (scans for `panic-wrist`).
 
 ## Verify before you trust it
@@ -67,4 +72,4 @@ directory, so the sketches are named `wristband/main.cpp` and
   and confirm the board's LED / any display before power-on and while it runs.
 - Sanity-check the accel stream in `ble_bridge.py`'s live bar: still wrist ≈ low,
   vigorous shake ≈ high. If axes look swapped or scaled wrong, fix `LSB_PER_G` /
-  the packing in `wristband.ino` first.
+  the packing in `wristband/main.cpp` first.
